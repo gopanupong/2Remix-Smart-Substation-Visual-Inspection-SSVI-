@@ -16,7 +16,7 @@ import {
   Plus,
   MonitorOff
 } from 'lucide-react';
-import { cn, SUBSTATIONS, InspectionLog } from './constants';
+import { cn, InspectionLog } from './constants';
 import { format } from 'date-fns';
 import { th } from 'date-fns/locale';
 import imageCompression from 'browser-image-compression';
@@ -119,24 +119,18 @@ const LoginPage = ({ onLogin }: { onLogin: (id: string) => void }) => {
         
         <div className="mt-8 flex flex-col items-center gap-4">
           <p className="text-xs text-slate-400 uppercase tracking-widest font-semibold">
-            Power Inspection System v1.0
+            Power Inspection System v1.1
           </p>
-          <a 
-            href="/api/auth/google" 
-            className="text-[10px] text-slate-300 hover:text-violet-400 transition-colors"
-          >
-            ตั้งค่าการเชื่อมต่อ Google (สำหรับผู้ดูแล)
-          </a>
         </div>
       </motion.div>
     </div>
   );
 };
 
-const SelectionPage = ({ onSelect, onLogout }: { onSelect: (sub: typeof SUBSTATIONS[0]) => void; onLogout: () => void }) => {
-  const [sortedSubstations, setSortedSubstations] = useState<(typeof SUBSTATIONS[0] & { distance?: number })[]>(SUBSTATIONS);
+const SelectionPage = ({ substations, onSelect, onLogout }: { substations: any[]; onSelect: (sub: any) => void; onLogout: () => void }) => {
+  const [sortedSubstations, setSortedSubstations] = useState<(any & { distance?: number })[]>(substations);
   const [loading, setLoading] = useState(true);
-  const [nearestSub, setNearestSub] = useState<(typeof SUBSTATIONS[0] & { distance?: number }) | null>(null);
+  const [nearestSub, setNearestSub] = useState<(any & { distance?: number }) | null>(null);
 
   // Haversine formula for accurate distance in km
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -152,11 +146,13 @@ const SelectionPage = ({ onSelect, onLogout }: { onSelect: (sub: typeof SUBSTATI
   };
 
   useEffect(() => {
+    if (substations.length === 0) return;
+    
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
         
-        const withDistance = SUBSTATIONS.map(sub => {
+        const withDistance = substations.map(sub => {
           const km = calculateDistance(latitude, longitude, sub.lat, sub.lng);
           return { ...sub, distance: km };
         });
@@ -299,7 +295,7 @@ const SelectionPage = ({ onSelect, onLogout }: { onSelect: (sub: typeof SUBSTATI
   );
 };
 
-const InspectionPage = ({ substation, employeeId, onBack, onComplete }: { substation: typeof SUBSTATIONS[0]; employeeId: string; onBack: () => void; onComplete: () => void }) => {
+const InspectionPage = ({ substation, employeeId, onBack, onComplete }: { substation: any; employeeId: string; onBack: () => void; onComplete: () => void }) => {
   const [photos, setPhotos] = useState<{ [key: string]: { file: File; comment: string }[] }>({
     building: [],
     yard: [],
@@ -511,53 +507,13 @@ const InspectionPage = ({ substation, employeeId, onBack, onComplete }: { substa
     
     try {
       const now = new Date();
-      const timeStr = format(now, 'HHmm');
-      const dateStr = now.toLocaleDateString("th-TH", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "2-digit",
-      }).replace(/\//g, "");
-      const nameSuffix = `${timeStr}_${dateStr}`;
-
-      // 1. Initialize Upload (Get Token and Folder ID)
-      const initRes = await fetch('/api/init-upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ substationName: substation.name, timestamp: now.toISOString() })
-      });
       
-      if (!initRes.ok) {
-        const errData = await initRes.json();
-        throw new Error(errData.error || 'Failed to initialize upload');
-      }
-      
-      const { accessToken, folderId } = await initRes.json();
-      const categoriesInSubmission = new Set<string>();
-
-      // Helper to upload directly to Google Drive
-      const uploadToDrive = async (blob: Blob, filename: string) => {
-        const metadata = {
-          name: filename,
-          parents: [folderId]
-        };
-
-        const formData = new FormData();
-        formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-        formData.append('file', blob);
-
-        const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          },
-          body: formData
-        });
-
-        if (!response.ok) {
-          throw new Error(`Drive upload failed: ${response.statusText}`);
-        }
-        return await response.json();
-      };
+      const formData = new FormData();
+      formData.append('employeeId', employeeId);
+      formData.append('substationName', substation.name);
+      formData.append('lat', (location?.lat || 0).toString());
+      formData.append('lng', (location?.lng || 0).toString());
+      formData.append('timestamp', now.toISOString());
 
       const compressionOptions = {
         maxSizeMB: 0.8,
@@ -565,7 +521,7 @@ const InspectionPage = ({ substation, employeeId, onBack, onComplete }: { substa
         useWebWorker: true
       };
 
-      // Process and Upload Fixed-Point photos
+      const categoriesInSubmission = new Set<string>();
       const photoEntries = Object.entries(photos) as [string, {file: File, comment: string}[]][];
       let totalPhotos = 0;
       photoEntries.forEach(([_, items]) => totalPhotos += items.length);
@@ -580,46 +536,37 @@ const InspectionPage = ({ substation, employeeId, onBack, onComplete }: { substa
           setStatus(`กำลังประมวลผลรูปที่ ${currentCount}/${totalPhotos}...`);
           
           const processedBlob = await addTimestampToImage(items[i].file, items[i].comment);
-          const processedFile = new File([processedBlob], 'temp.jpg', { type: 'image/jpeg' });
+          const processedFile = new File([processedBlob], `${key}_${i + 1}.jpg`, { type: 'image/jpeg' });
           const compressedBlob = await imageCompression(processedFile, compressionOptions);
           
-          await uploadToDrive(compressedBlob, `${key}_${i + 1}_${nameSuffix}.jpg`);
+          formData.append('photos', compressedBlob, `${key}_${i + 1}.jpg`);
         }
       }
       
-      // Process and Upload Checklists
       if (checklists.length > 0) categoriesInSubmission.add('checklist');
       for (let i = 0; i < checklists.length; i++) {
         currentCount++;
         setStatus(`กำลังประมวลผลรูปที่ ${currentCount}/${totalPhotos}...`);
         
         const processedBlob = await addTimestampToImage(checklists[i], '');
-        const processedFile = new File([processedBlob], 'temp.jpg', { type: 'image/jpeg' });
+        const processedFile = new File([processedBlob], `checklist_${i + 1}.jpg`, { type: 'image/jpeg' });
         const compressedBlob = await imageCompression(processedFile, compressionOptions);
         
-        await uploadToDrive(compressedBlob, `checklist_${i + 1}_${nameSuffix}.jpg`);
+        formData.append('photos', compressedBlob, `checklist_${i + 1}.jpg`);
       }
 
-      // 3. Finalize: Log to DB and Sheets
-      setStatus('กำลังบันทึกข้อมูลรายงาน...');
-      const finalizeRes = await fetch('/api/complete-upload', {
+      formData.append('categories', Array.from(categoriesInSubmission).join(','));
+
+      setStatus('กำลังอัปโหลดข้อมูลและรูปภาพ...');
+      const response = await fetch('/api/upload-inspection', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employeeId,
-          substationName: substation.name,
-          lat: location?.lat || 0,
-          lng: location?.lng || 0,
-          timestamp: now.toISOString(),
-          folderId,
-          categories: Array.from(categoriesInSubmission).join(',')
-        })
+        body: formData
       });
 
-      if (finalizeRes.ok) {
+      if (response.ok) {
         onComplete();
       } else {
-        const errData = await finalizeRes.json();
+        const errData = await response.json();
         alert(`บันทึกข้อมูลไม่สำเร็จ: ${errData.error}`);
       }
     } catch (err: any) {
@@ -866,7 +813,7 @@ const InspectionPage = ({ substation, employeeId, onBack, onComplete }: { substa
   );
 };
 
-const DashboardPage = ({ onBack }: { onBack: () => void }) => {
+const DashboardPage = ({ substations, onBack }: { substations: any[]; onBack: () => void }) => {
   const [stats, setStats] = useState<{ total: number; totalSubmissions: number; recent: InspectionLog[] }>({ total: 0, totalSubmissions: 0, recent: [] });
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
@@ -917,13 +864,13 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
     });
   });
 
-  const pendingSubstations = SUBSTATIONS.filter(sub => {
+  const pendingSubstations = substations.filter(sub => {
     const name = (sub.name || "").trim();
     const cats = substationCompletionMap.get(name);
     return !cats || cats.size < REQUIRED_CATEGORIES.length;
   });
 
-  const inspectedSubstations = SUBSTATIONS.filter(sub => {
+  const inspectedSubstations = substations.filter(sub => {
     const name = (sub.name || "").trim();
     const cats = substationCompletionMap.get(name);
     return cats && cats.size >= REQUIRED_CATEGORIES.length;
@@ -998,7 +945,7 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
               <div className="flex justify-between items-start">
                 <div>
                   <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">รอดำเนินการ</p>
-                  <h3 className="text-4xl font-bold text-slate-800">{SUBSTATIONS.length - stats.total} <span className="text-lg font-normal opacity-40">สถานี</span></h3>
+                  <h3 className="text-4xl font-bold text-slate-800">{substations.length - stats.total} <span className="text-lg font-normal opacity-40">สถานี</span></h3>
                 </div>
                 <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-300 group-hover:bg-violet-50 group-hover:text-violet-500 transition-colors">
                   <ChevronRight size={18} />
@@ -1011,9 +958,9 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
             <Card>
               <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">ความครอบคลุม</p>
               <h3 className="text-4xl font-bold text-slate-800">
-                {((stats.total / SUBSTATIONS.length) * 100).toFixed(1)}%
+                {substations.length > 0 ? ((stats.total / substations.length) * 100).toFixed(1) : 0}%
               </h3>
-              <p className="text-[10px] text-slate-400 mt-1 font-bold">จากทั้งหมด {SUBSTATIONS.length} สถานี</p>
+              <p className="text-[10px] text-slate-400 mt-1 font-bold">จากทั้งหมด {substations.length} สถานี</p>
             </Card>
           </div>
         </div>
@@ -1034,7 +981,7 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {SUBSTATIONS.map(sub => {
+                {substations.map(sub => {
                   const name = (sub.name || "").trim();
                   const cats = substationCompletionMap.get(name) || new Set();
                   const progress = cats.size;
@@ -1072,7 +1019,7 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
                     </tr>
                   );
                 })}
-                {SUBSTATIONS.every(sub => {
+                {substations.every(sub => {
                   const name = (sub.name || "").trim();
                   return !substationCompletionMap.has(name) && !stats.recent.some(l => (l.substation_name || "").trim() === name);
                 }) && (
@@ -1140,14 +1087,18 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <a 
-                        href={`https://drive.google.com/drive/folders/${log.folder_id}`} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="text-violet-600 hover:text-violet-700"
-                      >
-                        <ImageIcon size={18} />
-                      </a>
+                      {log.image_urls && log.image_urls.length > 0 ? (
+                        <a 
+                          href={log.image_urls[0]} 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="text-violet-600 hover:text-violet-700"
+                        >
+                          <ImageIcon size={18} />
+                        </a>
+                      ) : (
+                        <span className="text-slate-300"><ImageIcon size={18} /></span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1298,9 +1249,9 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
                           </span>
                         </div>
                       </div>
-                      {sub.latestLog && (
+                      {sub.latestLog && sub.latestLog.image_urls && sub.latestLog.image_urls.length > 0 && (
                         <a 
-                          href={`https://drive.google.com/drive/folders/${sub.latestLog.folder_id}`} 
+                          href={sub.latestLog.image_urls[0]} 
                           target="_blank" 
                           rel="noreferrer"
                           className="w-8 h-8 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center hover:bg-violet-100 transition-colors"
@@ -1340,7 +1291,15 @@ const DashboardPage = ({ onBack }: { onBack: () => void }) => {
 export default function App() {
   const [user, setUser] = useState<string | null>(localStorage.getItem('ssvi_user'));
   const [view, setView] = useState<'selection' | 'inspection' | 'dashboard' | 'success'>('selection');
-  const [selectedSub, setSelectedSub] = useState<typeof SUBSTATIONS[0] | null>(null);
+  const [substations, setSubstations] = useState<any[]>([]);
+  const [selectedSub, setSelectedSub] = useState<any | null>(null);
+
+  useEffect(() => {
+    fetch('/api/substations')
+      .then(res => res.json())
+      .then(data => setSubstations(data))
+      .catch(err => console.error('Error fetching substations:', err));
+  }, []);
 
   const handleLogin = (id: string) => {
     localStorage.setItem('ssvi_user', id);
@@ -1361,6 +1320,7 @@ export default function App() {
         {view === 'selection' && (
           <motion.div key="selection" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <SelectionPage 
+              substations={substations}
               onSelect={(sub) => {
                 setSelectedSub(sub);
                 setView('inspection');
@@ -1390,7 +1350,7 @@ export default function App() {
 
         {view === 'dashboard' && (
           <motion.div key="dashboard" initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }}>
-            <DashboardPage onBack={() => setView('selection')} />
+            <DashboardPage substations={substations} onBack={() => setView('selection')} />
           </motion.div>
         )}
 

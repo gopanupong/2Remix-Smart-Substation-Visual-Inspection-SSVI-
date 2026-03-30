@@ -100,7 +100,7 @@ export interface InspectionLog {
   timestamp: string;
   gps_lat: number;
   gps_lng: number;
-  folder_id: string;
+  image_urls: string[];
   status: string;
   categories?: string[];
 }
