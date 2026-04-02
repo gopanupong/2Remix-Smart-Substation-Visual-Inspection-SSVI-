@@ -4,9 +4,9 @@ import { Pool } from "pg";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
+import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { put } from "@vercel/blob";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -15,6 +15,12 @@ dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// Initialize Supabase Client
+const supabaseUrl = process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 // Use memoryStorage so files are never written to Vercel's disk
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -190,26 +196,37 @@ app.get("/api/substations", async (req, res) => {
   }
 });
 
-// Upload inspection with Vercel Blob and Postgres
+// Upload inspection with Supabase Storage and Postgres
 app.post("/api/upload-inspection", upload.array("photos"), async (req: any, res: any) => {
   const { employeeId, substationName, lat, lng, timestamp, categories } = req.body;
   const files = req.files as any[];
 
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return res.status(500).json({ error: "Vercel Blob token not configured" });
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(500).json({ error: "Supabase credentials not configured" });
   }
 
   try {
     const imageUrls: string[] = [];
     const dateObj = timestamp ? new Date(timestamp) : new Date();
 
-    // 1. Upload to Vercel Blob
+    // 1. Upload to Supabase Storage
     for (const file of files) {
-      const blob = await put(`inspections/${substationName}/${file.originalname}`, file.buffer, {
-        access: 'public',
-        contentType: file.mimetype,
-      });
-      imageUrls.push(blob.url);
+      const fileName = `inspections/${substationName}/${Date.now()}_${file.originalname}`;
+      const { data, error } = await supabase.storage
+        .from('inspections') // Make sure this bucket exists in Supabase
+        .upload(fileName, file.buffer, {
+          contentType: file.mimetype,
+          upsert: true
+        });
+
+      if (error) throw error;
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('inspections')
+        .getPublicUrl(fileName);
+      
+      imageUrls.push(publicUrl);
     }
 
     // 2. Log to Database
